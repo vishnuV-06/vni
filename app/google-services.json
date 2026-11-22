@@ -1,0 +1,49 @@
+{
+  "project_info": {
+    "project_number": "575320858627",
+    "firebase_url": "https://vni-assist-default-rtdb.firebaseio.com",
+    "project_id": "vni-assist",
+    "storage_bucket": "vni-assist.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:575320858627:android:845387eba5c8f2e0132e36",
+        "android_client_info": {
+          "package_name": "com.vni.assist"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBv-asyojavBq-TDMqh5YpweuuRb9v-SCE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:575320858627:android:845387eba5c8f2e0132e36",
+        "android_client_info": {
+          "package_name": "com.vni.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBv-asyojavBq-TDMqh5YpweuuRb9v-SCE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
