@@ -1,0 +1,59 @@
+name: Build & Release Android APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Publish Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Configure Keystore from Secrets
+        run: |
+          mkdir -p ~/.android
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > ~/.android/debug.keystore
+            echo "Custom release keystore loaded successfully."
+          else
+            echo "KEYSTORE_BASE64 secret not set, using default runner keystore."
+          fi
+
+      - name: Grant Execute Permission to Gradle Wrapper
+        run: chmod +x gradlew
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Prepare Release APK Artifact
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk vni-v3.apk
+          ls -lh vni-v3.apk
+
+      - name: Create GitHub Release & Upload APK
+        uses: softprops/action-gh-release@v2
+        with:
+          files: vni-v3.apk
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
