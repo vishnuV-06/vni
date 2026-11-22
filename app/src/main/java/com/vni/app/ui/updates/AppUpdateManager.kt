@@ -50,7 +50,7 @@ object AppUpdateManager {
             versionCode = 3,
             lastUpdatedDate = "17/11/26",
             sizeText = "4.4 MB",
-            downloadUrl = "https://raw.githubusercontent.com/vni/releases/main/vni-v3.apk",
+            downloadUrl = "https://github.com/vishnuV-06/vni/releases/latest/download/vni-v3.apk",
             hasUpload = true,
             isCurrent = true
         )
@@ -99,7 +99,13 @@ object AppUpdateManager {
                                 ref.child("v2").child("isCurrent").setValue(true)
                             }
                             val size = child.child("sizeText").getValue(String::class.java) ?: "4.4 MB"
-                            val url = child.child("downloadUrl").getValue(String::class.java) ?: ""
+                            var url = child.child("downloadUrl").getValue(String::class.java) ?: ""
+                            if (vKey == "v3") {
+                                if (url.isBlank() || url.contains("raw.githubusercontent") || url.contains("example.com")) {
+                                    url = "https://github.com/vishnuV-06/vni/releases/latest/download/vni-v3.apk"
+                                    ref.child("v3").child("downloadUrl").setValue(url)
+                                }
+                            }
                             val hasUp = child.child("hasUpload").getValue(Boolean::class.java) ?: (lDate.isNotBlank())
                             val isCur = child.child("isCurrent").getValue(Boolean::class.java) ?: (vKey == "v2")
 
@@ -185,8 +191,8 @@ object AppUpdateManager {
     }
 
     /**
-     * Downloads the APK file or prepares it from application binary cache.
-     * Guaranteed to produce a valid installable APK on the device.
+     * Downloads the APK file from GitHub Releases or configured URL with cross-domain HTTP redirect handling.
+     * Shows download progress and validates the downloaded APK file.
      */
     suspend fun downloadUpdate(
         context: Context,
@@ -197,58 +203,75 @@ object AppUpdateManager {
             ?: context.filesDir
         val targetFile = File(destDir, "vni_update_${version.versionKey}.apk")
 
-        var downloadSucceeded = false
-
-        if (version.downloadUrl.isNotBlank() && version.downloadUrl.startsWith("http")) {
-            try {
-                val url = URL(version.downloadUrl)
-                val conn = url.openConnection() as HttpURLConnection
-                conn.connectTimeout = 8000
-                conn.readTimeout = 12000
-                conn.connect()
-
-                if (conn.responseCode in 200..299) {
-                    val length = conn.contentLength.toFloat().coerceAtLeast(1f)
-                    var downloaded = 0
-                    val buffer = ByteArray(8192)
-
-                    conn.inputStream.use { input ->
-                        FileOutputStream(targetFile).use { output ->
-                            var read: Int
-                            while (input.read(buffer).also { read = it } != -1) {
-                                output.write(buffer, 0, read)
-                                downloaded += read
-                                onProgress((downloaded / length).coerceIn(0f, 1f))
-                            }
-                        }
-                    }
-                    downloadSucceeded = targetFile.exists() && targetFile.length() > 1000
-                }
-            } catch (e: Exception) {
-                downloadSucceeded = false
-            }
+        val effectiveUrl = if (version.versionKey == "v3" &&
+            (version.downloadUrl.isBlank() || version.downloadUrl.contains("raw.githubusercontent") || version.downloadUrl.contains("example.com"))
+        ) {
+            "https://github.com/vishnuV-06/vni/releases/latest/download/vni-v3.apk"
+        } else {
+            version.downloadUrl
         }
 
-        // If network download was offline or fallback is needed:
-        // Copy the current optimized base.apk package to the target location!
-        if (!downloadSucceeded) {
-            val sourceApk = File(context.applicationInfo.sourceDir)
-            if (sourceApk.exists()) {
-                val totalLength = sourceApk.length().toFloat().coerceAtLeast(1f)
-                var copied = 0L
-                val buffer = ByteArray(8192)
+        if (effectiveUrl.isBlank() || !effectiveUrl.startsWith("http")) {
+            throw java.io.IOException("Invalid download URL for ${version.versionName}")
+        }
 
-                sourceApk.inputStream().use { input ->
-                    FileOutputStream(targetFile).use { output ->
-                        var read: Int
-                        while (input.read(buffer).also { read = it } != -1) {
-                            output.write(buffer, 0, read)
-                            copied += read
-                            onProgress((copied / totalLength).coerceIn(0f, 1f))
+        var currentUrl = effectiveUrl
+        var conn: HttpURLConnection? = null
+        var redirectCount = 0
+        val maxRedirects = 6
+
+        while (redirectCount < maxRedirects) {
+            val u = URL(currentUrl)
+            conn = u.openConnection() as HttpURLConnection
+            conn.instanceFollowRedirects = true
+            conn.connectTimeout = 15000
+            conn.readTimeout = 25000
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; VNI-App)")
+            conn.connect()
+
+            val code = conn.responseCode
+            if (code in listOf(HttpURLConnection.HTTP_MOVED_PERM, HttpURLConnection.HTTP_MOVED_TEMP, HttpURLConnection.HTTP_SEE_OTHER, 307, 308)) {
+                val newLocation = conn.getHeaderField("Location")
+                conn.disconnect()
+                if (!newLocation.isNullOrBlank()) {
+                    currentUrl = if (newLocation.startsWith("http")) newLocation else URL(u, newLocation).toString()
+                    redirectCount++
+                    continue
+                }
+            }
+            break
+        }
+
+        if (conn == null || conn.responseCode !in 200..299) {
+            val errCode = conn?.responseCode ?: -1
+            throw java.io.IOException("Unable to download update (HTTP $errCode). Please check your internet connection.")
+        }
+
+        val length = conn.contentLength.toFloat().coerceAtLeast(1f)
+        var downloaded = 0
+        val buffer = ByteArray(8192)
+
+        try {
+            conn.inputStream.use { input ->
+                FileOutputStream(targetFile).use { output ->
+                    var read: Int
+                    while (input.read(buffer).also { read = it } != -1) {
+                        output.write(buffer, 0, read)
+                        downloaded += read
+                        if (length > 1f) {
+                            onProgress((downloaded / length).coerceIn(0f, 1f))
                         }
                     }
                 }
             }
+        } finally {
+            conn.disconnect()
+        }
+
+        // Verify the downloaded APK is valid and uncorrupted
+        if (!isApkValid(context, targetFile)) {
+            if (targetFile.exists()) targetFile.delete()
+            throw java.io.IOException("Downloaded update package is corrupted or incomplete. Please tap download again.")
         }
 
         onProgress(1f)
@@ -256,10 +279,29 @@ object AppUpdateManager {
     }
 
     /**
+     * Verifies that the APK file is non-empty, parseable, and matches this application's package name.
+     */
+    fun isApkValid(context: Context, apkFile: File): Boolean {
+        if (!apkFile.exists() || apkFile.length() < 100_000) return false
+        return try {
+            val pkgInfo = context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, 0)
+            pkgInfo != null && pkgInfo.packageName == context.packageName
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
      * Prompts the Android OS package installer to install the APK file in-place without deleting user data.
+     * If permission to install from unknown sources is needed, guides the user to the system settings.
      */
     fun promptInstallApk(context: Context, apkFile: File) {
         try {
+            if (!isApkValid(context, apkFile)) {
+                Toast.makeText(context, "APK package is invalid or corrupted. Please re-download.", Toast.LENGTH_LONG).show()
+                return
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!context.packageManager.canRequestPackageInstalls()) {
                     val settingsIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
@@ -267,7 +309,7 @@ object AppUpdateManager {
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
                     }
                     context.startActivity(settingsIntent)
-                    Toast.makeText(context, "Please allow VNI to install updates, then tap install again", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "Please allow VNI to install updates, then return and tap Install & Restart", Toast.LENGTH_LONG).show()
                     return
                 }
             }
